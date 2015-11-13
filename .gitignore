@@ -1,0 +1,8 @@
+bin/
+obj/
+*.userprefs
+XnaToFna/bin/
+XnaToFna/obj/
+XnaToFna/*.sln
+XnaToFna/*.userprefs
+
