@@ -7,6 +7,8 @@ namespace XnaToFna {
 
         private static ModuleDefinition FNA;
         
+        private static ModuleDefinition Module;
+        
         private static TypeReference ImportIfNeeded(this ModuleDefinition module, TypeReference r) {
             return r == null ? null : r.Module.Name != module.Name ? module.Import(r) : r;
         }
@@ -18,13 +20,32 @@ namespace XnaToFna {
         }
         
         private static bool IsXNA(this TypeReference r) {
-            return r != null && r.Scope.Name.Contains("Microsoft.Xna.Framework");
+            if (r == null) {
+                return false;
+            }
+            if (r.GetElementType() != null && r.GetElementType() != r && r.GetElementType().IsXNA()) {
+                return true;
+            }
+            if (r.IsGenericInstance) {
+                foreach (TypeReference genericArgument in ((GenericInstanceType) r).GenericArguments) {
+                    if (genericArgument.IsXNA()) {
+                        return true;
+                    }
+                }
+            }
+            return r.Scope.Name.Contains("Microsoft.Xna.Framework") || r.Scope.Name.Contains("FNA");
         }
         private static bool IsXNA(this MethodReference r) {
-            return r != null && r.DeclaringType.Scope.Name.Contains("Microsoft.Xna.Framework");
+            if (r == null) {
+                return false;
+            }
+            return r.DeclaringType.IsXNA();
         }
         private static bool IsXNA(this FieldReference r) {
-            return r != null && (r.DeclaringType.Scope.Name.Contains("Microsoft.Xna.Framework") || r.FieldType.Scope.Name.Contains("Microsoft.Xna.Framework"));
+            if (r == null) {
+                return false;
+            }
+            return r.DeclaringType.IsXNA() || r.FieldType.IsXNA();
         }
         
         private static string ReplaceGenerics(string str, MethodReference method, TypeReference type) {
@@ -49,46 +70,38 @@ namespace XnaToFna {
         }
 
         private static TypeReference FindFNA(this TypeReference type, MemberReference context = null) {
-            if (!type.IsXNA()) {
-                return type;
-            }
             if (type == null) {
-                Console.WriteLine("ERROR: Can't find null type!");
+                Console.WriteLine("Can't find null type! Context: " + (context == null ? "none" : context.FullName));
                 Console.WriteLine(Environment.StackTrace);
                 return null;
             }
-            string typeName = type.FullName; //RemovePrefixes
-            TypeReference foundType = FNA.GetType(typeName);
+            TypeReference foundType = type.IsXNA() ? FNA.GetType(type.FullName) : null;
             if (foundType == null && type.IsByReference) {
-                foundType = FindFNA(type.GetElementType(), context);
+                foundType = type.GetElementType().FindFNA(context);
             }
             if (foundType == null && type.IsArray) {
-                foundType = new ArrayType(FindFNA(type.GetElementType(), context));
+                foundType = new ArrayType(Module.ImportIfNeeded(type.GetElementType().FindFNA(context)));
             }
             if (foundType == null && context != null && type.IsGenericParameter) {
-                foundType = FindFNAGeneric(type, context); 
-           }
+                foundType = type.FindFNAGeneric(context); 
+            }
             if (foundType == null && context != null && type.IsGenericInstance) {
-                foundType = new GenericInstanceType(FindFNA(type.GetElementType(), context));
+                foundType = new GenericInstanceType(Module.ImportIfNeeded(type.GetElementType().FindFNA(context)));
                 foreach (TypeReference genericArgument in ((GenericInstanceType) type).GenericArguments) {
-                    ((GenericInstanceType) foundType).GenericArguments.Add(FindFNA(genericArgument, context));
+                    ((GenericInstanceType) foundType).GenericArguments.Add(Module.ImportIfNeeded(genericArgument.FindFNA(context)));
                 }
             }
-            if (foundType == null) {
+            if (type.IsXNA() && foundType == null) {
                 Console.WriteLine("Could not find type " + type.FullName);
             }
             return foundType ?? type;
         }
 
         private static TypeReference FindFNAGeneric(this TypeReference type, MemberReference context) {
-            if (!type.IsXNA()) {
-                return type;
-            }
             if (context is MethodReference) {
                 for (int gi = 0; gi < ((MethodReference) context).GenericParameters.Count; gi++) {
                     GenericParameter genericParam = ((MethodReference) context).GenericParameters[gi];
                     if (genericParam.FullName == type.FullName) {
-                        //TODO variables hate me, import otherwise
                         return genericParam;
                     }
                 }
@@ -97,13 +110,12 @@ namespace XnaToFna {
                 for (int gi = 0; gi < ((TypeReference) context).GenericParameters.Count; gi++) {
                     GenericParameter genericParam = ((TypeReference) context).GenericParameters[gi];
                     if (genericParam.FullName == type.FullName) {
-                        //TODO variables hate me, import otherwise
                         return genericParam;
                     }
                 }
             }
             if (context.DeclaringType != null) {
-                return FindFNAGeneric(type, context.DeclaringType);
+                return type.FindFNAGeneric(context.DeclaringType);
             }
             return type;
         }
@@ -112,7 +124,7 @@ namespace XnaToFna {
             if (!method.IsXNA()) {
                 return method;
             }
-            TypeReference findTypeRef = FindFNA(method.DeclaringType, context);
+            TypeReference findTypeRef = method.DeclaringType.FindFNA(context);
             TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsDefinition ? (TypeDefinition) findTypeRef : findTypeRef.Resolve();
             
             if (findType != null) {
@@ -144,19 +156,21 @@ namespace XnaToFna {
             return method;
         }
 
-        private static void patch(ModuleDefinition module, TypeDefinition type) {
+        private static void patch(TypeDefinition type) {
             for (int i = 0; i < type.NestedTypes.Count; i++) {
-                patch(module, type.NestedTypes[i]);
+                patch(type.NestedTypes[i]);
             }
             
-            type.BaseType = module.ImportIfNeeded(type.BaseType.FindFNA());
+            if (type.BaseType != null) {
+                type.BaseType = Module.ImportIfNeeded(type.BaseType.FindFNA(type));
+            }
             
             for (int ii = 0; ii < type.Fields.Count; ii++) {
                  FieldDefinition field = type.Fields[ii];
                  if (!field.FieldType.IsXNA()) {
                     continue;
                  }
-                 field.FieldType = module.ImportIfNeeded(FindFNA(field.FieldType, type));
+                 field.FieldType = Module.ImportIfNeeded(field.FieldType.FindFNA(type));
             }
             
             for (int ii = 0; ii < type.Properties.Count; ii++) {
@@ -164,53 +178,50 @@ namespace XnaToFna {
                 if (!property.PropertyType.IsXNA()) {
                     continue;
                 }
-                property.PropertyType = module.ImportIfNeeded(FindFNA(property.PropertyType, type));
+                property.PropertyType = Module.ImportIfNeeded(property.PropertyType.FindFNA(type));
             }
 
             for (int i = 0; i < type.Methods.Count; i++) {
                 MethodDefinition method = type.Methods[i];
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
-                    //TODO debug! (Import crashes in MonoMod)
-                    if (!method.Body.Variables[ii].VariableType.IsXNA()) {
-                        continue;
-                    }
-                    method.Body.Variables[ii].VariableType = module.ImportIfNeeded(FindFNA(method.Body.Variables[ii].VariableType, method));
+                    method.Body.Variables[ii].VariableType = Module.ImportIfNeeded(method.Body.Variables[ii].VariableType.FindFNA(method));
                 }
                 
                 for (int ii = 0; ii < method.Parameters.Count; ii++) {
-                    if (!method.Parameters[ii].ParameterType.IsXNA()) {
-                        continue;
-                    }
-                    method.Parameters[ii].ParameterType = module.ImportIfNeeded(FindFNA(method.Parameters[ii].ParameterType, method));
+                    method.Parameters[ii].ParameterType = Module.ImportIfNeeded(method.Parameters[ii].ParameterType.FindFNA(method));
                 }
                 
-                method.ReturnType = module.ImportIfNeeded(FindFNA(method.ReturnType, method));
+                method.ReturnType = Module.ImportIfNeeded(method.ReturnType.FindFNA(method));
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
                     Instruction instruction = method.Body.Instructions[ii];
                     
                     if (instruction.Operand is TypeReference) {
-                        instruction.Operand = module.ImportIfNeeded(FindFNA((TypeReference) instruction.Operand, method));
+                        instruction.Operand = Module.ImportIfNeeded(((TypeReference) instruction.Operand).FindFNA(method));
                     } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
-                        instruction.Operand = module.ImportIfNeeded(FindFNA((MethodReference) instruction.Operand, method));
+                        instruction.Operand = Module.ImportIfNeeded(((MethodReference) instruction.Operand).FindFNA(method));
                     } else if (instruction.Operand is MethodReference) {
                         MethodReference methodr = (MethodReference) instruction.Operand;
                         
+                        MethodReference genMethod = new MethodReference(methodr.Name, Module.ImportIfNeeded(methodr.ReturnType.FindFNA(method)), Module.ImportIfNeeded(methodr.DeclaringType.FindFNA(method)));
+                        genMethod.CallingConvention = methodr.CallingConvention;
+                        genMethod.HasThis = methodr.HasThis;
+                        genMethod.ExplicitThis = methodr.ExplicitThis;
+                        for (int iii = 0; iii < methodr.GenericParameters.Count; iii++) {
+                            genMethod.GenericParameters.Add((GenericParameter) Module.ImportIfNeeded(methodr.Parameters[iii].ParameterType.FindFNA(genMethod)));
+                        }
                         for (int iii = 0; iii < methodr.Parameters.Count; iii++) {
-                            if (!methodr.Parameters[iii].ParameterType.IsXNA()) {
-                                continue;
-                            }
-                            methodr.Parameters[iii].ParameterType = module.ImportIfNeeded(FindFNA(methodr.Parameters[iii].ParameterType, method));
+                            genMethod.Parameters.Add(new ParameterDefinition(Module.ImportIfNeeded(methodr.Parameters[iii].ParameterType.FindFNA(genMethod))));
                         }
                         
-                        instruction.Operand = methodr;
-                    } else if (instruction.Operand is FieldReference) {
+                        instruction.Operand = Module.Import(genMethod);
+                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
                         FieldReference field = (FieldReference) instruction.Operand;
     
-                        TypeReference findTypeRef = FindFNA(field.DeclaringType, method);
+                        TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
                         TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsXNA() ? null : findTypeRef.Resolve();
-                        findTypeRef = module.ImportIfNeeded(findTypeRef);
+                        findTypeRef = Module.ImportIfNeeded(findTypeRef);
                         
                         if (findType != null) {
                             for (int iii = 0; iii < findType.Fields.Count; iii++) {
@@ -218,17 +229,17 @@ namespace XnaToFna {
                                     FieldReference foundField = findType.Fields[iii];
                                     
                                     if (field.DeclaringType.IsGenericInstance) {
-                                        foundField = module.ImportIfNeeded(new FieldReference(field.Name, FindFNA(field.FieldType, findTypeRef), findTypeRef));
+                                        foundField = Module.ImportIfNeeded(new FieldReference(field.Name, field.FieldType.FindFNA(findTypeRef), findTypeRef));
                                     }
                                     
-                                    field = module.ImportIfNeeded(foundField);
+                                    field = Module.ImportIfNeeded(foundField);
                                     break;
                                 }
                             }
                         }
     
                         if (field == instruction.Operand) {
-                            field = new FieldReference(field.Name, module.ImportIfNeeded(FindFNA(field.FieldType, method)), module.ImportIfNeeded(FindFNA(field.DeclaringType, method)));
+                            field = Module.Import(new FieldReference(field.Name, Module.ImportIfNeeded(field.FieldType.FindFNA(method)), Module.ImportIfNeeded(field.DeclaringType.FindFNA(method))));
                         }
                         
                         instruction.Operand = field;
@@ -243,40 +254,34 @@ namespace XnaToFna {
 
             foreach (string arg in args) {
                 Console.WriteLine("Patching " + arg);
-                ModuleDefinition module = ModuleDefinition.ReadModule(arg);
+                Module = ModuleDefinition.ReadModule(arg);
 
-                for (int i = 0; i < module.AssemblyReferences.Count; i++) {
-                    if (module.AssemblyReferences[i].Name != "Microsoft.Xna.Framework") {
-                        continue;
-                    }
-                    Console.WriteLine("Found reference to XNA - replacing with FNA");
-                    module.AssemblyReferences[i] = new AssemblyNameReference("FNA", new Version(0, 0, 0, 1));
-                }
-                
-                for (int i = 0; i < module.Types.Count; i++) {
-                    patch(module, module.Types[i]);
-                }
-
-                module.Write(arg);
-            }
-            
-            foreach (string arg in args) {
-                Console.WriteLine("Cleaning " + arg);
-                ModuleDefinition module = ModuleDefinition.ReadModule(arg);
-
-                for (int i = 0; i < module.AssemblyReferences.Count; i++) {
-                    if (module.AssemblyReferences[i].Name.StartsWith("Microsoft.Xna.Framework.")) {
-                        if (module.AssemblyReferences[i].Name.EndsWith(".Xact")) {
+                for (int i = 0; i < Module.AssemblyReferences.Count; i++) {
+                    if (Module.AssemblyReferences[i].Name.StartsWith("Microsoft.Xna.Framework.")) {
+                        if (Module.AssemblyReferences[i].Name.EndsWith(".Xact")) {
                             continue;
                         }
-                        Console.WriteLine("Found reference to XNA assembly " + module.AssemblyReferences[i].Name + " - removing");
-                        module.AssemblyReferences.RemoveAt(i);
+                        Console.WriteLine("Found reference to XNA assembly " + Module.AssemblyReferences[i].Name + " - removing");
+                        Module.AssemblyReferences.RemoveAt(i);
                         i--;
                         continue;
                     }
+                    if (Module.AssemblyReferences[i].Name != "Microsoft.Xna.Framework") {
+                        continue;
+                    }
+                    Console.WriteLine("Found reference to XNA - replacing with FNA");
+                    Module.AssemblyReferences[i] = new AssemblyNameReference("FNA", new Version(0, 0, 0, 1));
                 }
                 
-                module.Write(arg);
+                for (int i = 0; i < Module.Types.Count; i++) {
+                    patch(Module.Types[i]);
+                }
+
+                Module.Write(arg);
+                //For those brave enough: Feel free to fix the error caused by uncommenting the following lines.
+                //FIXME find the cause of the unreadwritability bug
+                //Module = ModuleDefinition.ReadModule(arg);
+                //Module.Write(arg);
             }
         }
 
