@@ -142,6 +142,22 @@ namespace XnaToFna {
                     //Console.WriteLine("debug m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
 
                     if (methodName == foundMethodName) {
+                        if (method.DeclaringType.IsGenericInstance) {
+                            //TODO test return type context
+                            MethodReference genMethod = new MethodReference(method.Name, Module.ImportIfNeeded(FindFNA(method.ReturnType, findTypeRef)), Module.ImportIfNeeded(findTypeRef));
+                            genMethod.CallingConvention = method.CallingConvention;
+                            genMethod.HasThis = method.HasThis;
+                            genMethod.ExplicitThis = method.ExplicitThis;
+                            for (int i = 0; i < method.GenericParameters.Count; i++) {
+                                genMethod.GenericParameters.Add((GenericParameter) Module.ImportIfNeeded(FindFNA(method.GenericParameters[i], genMethod)));
+                            }
+                            for (int i = 0; i < method.Parameters.Count; i++) {
+                                genMethod.Parameters.Add(new ParameterDefinition(Module.ImportIfNeeded(FindFNA(method.Parameters[i].ParameterType, genMethod))));
+                            }
+                            
+                            foundMethod = Module.ImportIfNeeded(genMethod);
+                        }
+                        
                         return foundMethod;
                     }
                 }
