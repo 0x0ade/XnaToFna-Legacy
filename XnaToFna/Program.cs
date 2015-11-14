@@ -258,9 +258,10 @@ namespace XnaToFna {
 
                 for (int i = 0; i < Module.AssemblyReferences.Count; i++) {
                     if (Module.AssemblyReferences[i].Name.StartsWith("Microsoft.Xna.Framework.")) {
-                        if (Module.AssemblyReferences[i].Name.EndsWith(".Xact")) {
+                        //Xact is causing some random issues
+                        /*if (Module.AssemblyReferences[i].Name.EndsWith(".Xact")) {
                             continue;
-                        }
+                        }*/
                         Console.WriteLine("Found reference to XNA assembly " + Module.AssemblyReferences[i].Name + " - removing");
                         Module.AssemblyReferences.RemoveAt(i);
                         i--;
