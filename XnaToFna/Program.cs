@@ -94,7 +94,7 @@ namespace XnaToFna {
             if (type.IsXNA() && foundType == null) {
                 Console.WriteLine("Could not find type " + type.FullName);
             }
-            return foundType ?? type;
+            return (type.IsXNA() ? Module.ImportIfNeeded(foundType) : null) ?? type;
         }
 
         private static TypeReference FindFNAGeneric(this TypeReference type, MemberReference context) {
@@ -142,20 +142,33 @@ namespace XnaToFna {
                     //Console.WriteLine("debug m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
 
                     if (methodName == foundMethodName) {
+                        foundMethod = Module.ImportIfNeeded(foundMethod);
+                        
                         if (method.DeclaringType.IsGenericInstance) {
                             //TODO test return type context
-                            MethodReference genMethod = new MethodReference(method.Name, Module.ImportIfNeeded(FindFNA(method.ReturnType, findTypeRef)), Module.ImportIfNeeded(findTypeRef));
+                            MethodReference genMethod = new MethodReference(method.Name, FindFNA(method.ReturnType, findTypeRef), findTypeRef);
                             genMethod.CallingConvention = method.CallingConvention;
                             genMethod.HasThis = method.HasThis;
                             genMethod.ExplicitThis = method.ExplicitThis;
                             for (int i = 0; i < method.GenericParameters.Count; i++) {
-                                genMethod.GenericParameters.Add((GenericParameter) Module.ImportIfNeeded(FindFNA(method.GenericParameters[i], genMethod)));
+                                genMethod.GenericParameters.Add((GenericParameter) FindFNA(method.GenericParameters[i], genMethod));
                             }
                             for (int i = 0; i < method.Parameters.Count; i++) {
-                                genMethod.Parameters.Add(new ParameterDefinition(Module.ImportIfNeeded(FindFNA(method.Parameters[i].ParameterType, genMethod))));
+                                genMethod.Parameters.Add(new ParameterDefinition(FindFNA(method.Parameters[i].ParameterType, genMethod)));
                             }
                             
                             foundMethod = Module.ImportIfNeeded(genMethod);
+                        }
+                        
+                        if (method.IsGenericInstance) {
+                            GenericInstanceMethod genMethod = new GenericInstanceMethod(foundMethod);
+                            GenericInstanceMethod methodg = ((GenericInstanceMethod) method);
+                            
+                            for (int i = 0; i < methodg.GenericArguments.Count; i++) {
+                                genMethod.GenericArguments.Add(FindFNA(methodg.GenericArguments[i], genMethod));
+                            }
+                            
+                            foundMethod = genMethod;
                         }
                         
                         return foundMethod;
@@ -178,7 +191,7 @@ namespace XnaToFna {
             }
             
             if (type.BaseType != null) {
-                type.BaseType = Module.ImportIfNeeded(type.BaseType.FindFNA(type));
+                type.BaseType = type.BaseType.FindFNA(type);
             }
             
             for (int ii = 0; ii < type.Fields.Count; ii++) {
@@ -186,7 +199,7 @@ namespace XnaToFna {
                  if (!field.FieldType.IsXNA()) {
                     continue;
                  }
-                 field.FieldType = Module.ImportIfNeeded(field.FieldType.FindFNA(type));
+                 field.FieldType = field.FieldType.FindFNA(type);
             }
             
             for (int ii = 0; ii < type.Properties.Count; ii++) {
@@ -194,41 +207,41 @@ namespace XnaToFna {
                 if (!property.PropertyType.IsXNA()) {
                     continue;
                 }
-                property.PropertyType = Module.ImportIfNeeded(property.PropertyType.FindFNA(type));
+                property.PropertyType = property.PropertyType.FindFNA(type);
             }
 
             for (int i = 0; i < type.Methods.Count; i++) {
                 MethodDefinition method = type.Methods[i];
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
-                    method.Body.Variables[ii].VariableType = Module.ImportIfNeeded(method.Body.Variables[ii].VariableType.FindFNA(method));
+                    method.Body.Variables[ii].VariableType = method.Body.Variables[ii].VariableType.FindFNA(method);
                 }
                 
                 for (int ii = 0; ii < method.Parameters.Count; ii++) {
-                    method.Parameters[ii].ParameterType = Module.ImportIfNeeded(method.Parameters[ii].ParameterType.FindFNA(method));
+                    method.Parameters[ii].ParameterType = method.Parameters[ii].ParameterType.FindFNA(method);
                 }
                 
-                method.ReturnType = Module.ImportIfNeeded(method.ReturnType.FindFNA(method));
+                method.ReturnType = method.ReturnType.FindFNA(method);
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
                     Instruction instruction = method.Body.Instructions[ii];
                     
                     if (instruction.Operand is TypeReference) {
-                        instruction.Operand = Module.ImportIfNeeded(((TypeReference) instruction.Operand).FindFNA(method));
+                        instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
                     } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
-                        instruction.Operand = Module.ImportIfNeeded(((MethodReference) instruction.Operand).FindFNA(method));
+                        instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
                     } else if (instruction.Operand is MethodReference) {
                         MethodReference methodr = (MethodReference) instruction.Operand;
                         
-                        MethodReference genMethod = new MethodReference(methodr.Name, Module.ImportIfNeeded(methodr.ReturnType.FindFNA(method)), Module.ImportIfNeeded(methodr.DeclaringType.FindFNA(method)));
+                        MethodReference genMethod = new MethodReference(methodr.Name, methodr.ReturnType.FindFNA(method), methodr.DeclaringType.FindFNA(method));
                         genMethod.CallingConvention = methodr.CallingConvention;
                         genMethod.HasThis = methodr.HasThis;
                         genMethod.ExplicitThis = methodr.ExplicitThis;
                         for (int iii = 0; iii < methodr.GenericParameters.Count; iii++) {
-                            genMethod.GenericParameters.Add((GenericParameter) Module.ImportIfNeeded(methodr.Parameters[iii].ParameterType.FindFNA(genMethod)));
+                            genMethod.GenericParameters.Add((GenericParameter) methodr.Parameters[iii].ParameterType.FindFNA(genMethod));
                         }
                         for (int iii = 0; iii < methodr.Parameters.Count; iii++) {
-                            genMethod.Parameters.Add(new ParameterDefinition(Module.ImportIfNeeded(methodr.Parameters[iii].ParameterType.FindFNA(genMethod))));
+                            genMethod.Parameters.Add(new ParameterDefinition(methodr.Parameters[iii].ParameterType.FindFNA(genMethod)));
                         }
                         
                         instruction.Operand = Module.Import(genMethod);
