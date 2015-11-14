@@ -81,7 +81,7 @@ namespace XnaToFna {
             return str;
         }
 
-        private static TypeReference FindFNA(this TypeReference type, MemberReference context = null) {
+        private static TypeReference FindFNA(this TypeReference type, MemberReference context = null, bool fallbackOnXNA = true) {
             if (type == null) {
                 Console.WriteLine("Can't find null type! Context: " + (context == null ? "none" : context.FullName));
                 Console.WriteLine(Environment.StackTrace);
@@ -106,7 +106,7 @@ namespace XnaToFna {
             if (type.IsXNA() && foundType == null) {
                 Console.WriteLine("Could not find type " + type.FullName);
             }
-            return (type.IsXNA() ? Module.ImportIfNeeded(foundType) : null) ?? type;
+            return (type.IsXNA() ? Module.ImportIfNeeded(foundType) : null) ?? (fallbackOnXNA || !type.Scope.Name.StartsWith("Microsoft.Xna.Framework") ? type : null);
         }
 
         private static TypeReference FindFNAGeneric(this TypeReference type, MemberReference context) {
@@ -136,7 +136,7 @@ namespace XnaToFna {
             if (!method.IsXNA()) {
                 return method;
             }
-            TypeReference findTypeRef = method.DeclaringType.FindFNA(context);
+            TypeReference findTypeRef = method.DeclaringType.FindFNA(context, false);
             TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsDefinition ? (TypeDefinition) findTypeRef : findTypeRef.Resolve();
             
             if (findType != null) {
@@ -188,11 +188,12 @@ namespace XnaToFna {
                 }
             }
 
-            //For anyone trying to find out why / when no method gets found: Take this!
-            Console.WriteLine("debug method fullname   : " + method.FullName);
-            Console.WriteLine("debug method findTypeRef: " + findTypeRef);
-            Console.WriteLine("debug method findType   : " + findType);
-            Console.WriteLine("debug method type scope : " + findTypeRef.Scope.Name);
+            Console.WriteLine("Method not found     : " + method.FullName);
+            Console.WriteLine("Found type reference : " + findTypeRef);
+            Console.WriteLine("Found type definition: " + findType);
+            if (findTypeRef != null) {
+                Console.WriteLine("Found type scope     : " + findTypeRef.Scope.Name);
+            }
             
             if (findTypeRef == null) {
                 return method;
@@ -250,7 +251,6 @@ namespace XnaToFna {
 
             for (int i = 0; i < type.Methods.Count; i++) {
                 MethodDefinition method = type.Methods[i];
-                Console.WriteLine("M: " + method.FullName);
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
                     method.Body.Variables[ii].VariableType = method.Body.Variables[ii].VariableType.FindFNA(method);
