@@ -39,7 +39,19 @@ namespace XnaToFna {
             if (r == null) {
                 return false;
             }
-            return r.DeclaringType.IsXNA();
+            if (r.IsGenericInstance) {
+                foreach (TypeReference genericArgument in ((GenericInstanceMethod) r).GenericArguments) {
+                    if (genericArgument.IsXNA()) {
+                        return true;
+                    }
+                }
+            }
+            for (int i = 0; i < r.Parameters.Count; i++) {
+                if (r.Parameters[i].ParameterType.IsXNA()) {
+                    return true;
+                }
+            }
+            return r.DeclaringType.IsXNA() || r.ReturnType.IsXNA();
         }
         private static bool IsXNA(this FieldReference r) {
             if (r == null) {
@@ -177,12 +189,38 @@ namespace XnaToFna {
             }
 
             //For anyone trying to find out why / when no method gets found: Take this!
-            Console.WriteLine("debug m z a: " + method.FullName);
-            Console.WriteLine("debug m z b: " + findTypeRef);
-            Console.WriteLine("debug m z c: " + findType);
-            Console.WriteLine("debug m z d: " + findTypeRef.Scope.Name);
-
-            return method;
+            Console.WriteLine("debug method fullname   : " + method.FullName);
+            Console.WriteLine("debug method findTypeRef: " + findTypeRef);
+            Console.WriteLine("debug method findType   : " + findType);
+            Console.WriteLine("debug method type scope : " + findTypeRef.Scope.Name);
+            
+            if (findTypeRef == null) {
+                return method;
+            }
+            
+            MethodReference fbgenMethod = new MethodReference(method.Name, FindFNA(method.ReturnType, findTypeRef), findTypeRef);
+            fbgenMethod.CallingConvention = method.CallingConvention;
+            fbgenMethod.HasThis = method.HasThis;
+            fbgenMethod.ExplicitThis = method.ExplicitThis;
+            for (int i = 0; i < method.GenericParameters.Count; i++) {
+                fbgenMethod.GenericParameters.Add((GenericParameter) FindFNA(method.GenericParameters[i], fbgenMethod));
+            }
+            for (int i = 0; i < method.Parameters.Count; i++) {
+                fbgenMethod.Parameters.Add(new ParameterDefinition(FindFNA(method.Parameters[i].ParameterType, fbgenMethod)));
+            }
+            
+            if (method.IsGenericInstance) {
+                GenericInstanceMethod genMethod = new GenericInstanceMethod(fbgenMethod);
+                GenericInstanceMethod methodg = ((GenericInstanceMethod) method);
+                
+                for (int i = 0; i < methodg.GenericArguments.Count; i++) {
+                    genMethod.GenericArguments.Add(FindFNA(methodg.GenericArguments[i], genMethod));
+                }
+                
+                fbgenMethod = genMethod;
+            }
+            
+            return fbgenMethod;
         }
 
         private static void patch(TypeDefinition type) {
@@ -212,6 +250,7 @@ namespace XnaToFna {
 
             for (int i = 0; i < type.Methods.Count; i++) {
                 MethodDefinition method = type.Methods[i];
+                Console.WriteLine("M: " + method.FullName);
                 
                 for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
                     method.Body.Variables[ii].VariableType = method.Body.Variables[ii].VariableType.FindFNA(method);
@@ -230,7 +269,7 @@ namespace XnaToFna {
                         instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
                     } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
                         instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
-                    } else if (instruction.Operand is MethodReference) {
+                    } /*else if (instruction.Operand is MethodReference) {
                         MethodReference methodr = (MethodReference) instruction.Operand;
                         
                         MethodReference genMethod = new MethodReference(methodr.Name, methodr.ReturnType.FindFNA(method), methodr.DeclaringType.FindFNA(method));
@@ -245,7 +284,7 @@ namespace XnaToFna {
                         }
                         
                         instruction.Operand = Module.Import(genMethod);
-                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
+                    }*/ else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
                         FieldReference field = (FieldReference) instruction.Operand;
     
                         TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
