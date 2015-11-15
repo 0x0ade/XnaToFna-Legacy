@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
@@ -315,13 +316,87 @@ namespace XnaToFna {
                 for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
                     Instruction instruction = method.Body.Instructions[ii];
                     
+                    if (instruction.OpCode == OpCodes.Ldstr) {
+                        string str = (string) instruction.Operand;
+                        bool pathFixed = false;
+                        
+                        if (!str.StartsWith("Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\') {
+                            Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
+                            if (FixBrokenPaths) {
+                                str = ((string) instruction.Operand).Replace('\\', Path.DirectorySeparatorChar);
+                                pathFixed = true;
+                            }
+                        }
+                        
+                        if (str.StartsWith(Path.DirectorySeparatorChar + "Content" + Path.DirectorySeparatorChar) && !File.Exists("." + str)) {
+                            Console.WriteLine("Broken path (File not found - case?) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
+                            if (FixBrokenPaths) {
+                                string found = "."+Path.DirectorySeparatorChar;
+                                string[] levels = Path.Combine(".", str.ToLowerInvariant()).Split(Path.DirectorySeparatorChar);
+                                int level = 1;
+                                for (; level < levels.Length; level++) {
+                                    bool subFound = false;
+                                    
+                                    foreach (string sub_ in Directory.EnumerateDirectories(found)) {
+                                        string sub = sub_.Substring(found.Length);
+                                        if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
+                                            sub = sub.Substring(1);
+                                        }
+                                        if (sub.ToLower() == levels[level]) {
+                                            found = Path.Combine(found, sub);
+                                            subFound = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (subFound) {
+                                        continue;
+                                    } else if (level < levels.Length - 1) {
+                                        Console.WriteLine("A directory on the path cannot be found case-insensitively!");
+                                        break;
+                                    }
+                                    
+                                    if (level < levels.Length - 1) {
+                                        continue;
+                                    }
+                                    
+                                    foreach (string sub_ in Directory.EnumerateFiles(found)) {
+                                        string sub = sub_.Substring(found.Length);
+                                        if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
+                                            sub = sub.Substring(1);
+                                        }
+                                        if (sub.ToLower() == levels[level]) {
+                                            found = Path.Combine(found, sub);
+                                            subFound = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    if (!subFound) {
+                                        Console.WriteLine("The file cannot be found case-insensitively!");
+                                        break;
+                                    }
+                                }
+                                if (level == levels.Length) {
+                                    str = found;
+                                }
+                                pathFixed = true;
+                            }
+                        }
+                        
+                        if (pathFixed) {
+                            Console.WriteLine("New path: " + str);
+                        }
+                        instruction.Operand = str;
+                        continue;
+                    }
+                    
                     if (instruction.OpCode == OpCodes.Ldstr && ((string) instruction.Operand).Contains("\\")) {
                         if (FixBrokenPaths) {
                             instruction.Operand = ((string) instruction.Operand).Replace("\\", "/");
                         } else {
                             Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
                         }
-                        continue;
                     }
                     
                     if (instruction.Operand is TypeReference) {
