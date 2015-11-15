@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -6,8 +7,12 @@ using Mono.Cecil.Cil;
 namespace XnaToFna {
     static class Program {
 
+        private static ModuleDefinition XTF;
         private static ModuleDefinition FNA;
         private static bool FixBrokenPaths = false;
+        
+        private static TypeDefinition xtf_Helper;
+        private static Dictionary<string, MethodDefinition> xtf_Methods = new Dictionary<string, MethodDefinition>();
         
         private static ModuleDefinition Module;
 
@@ -323,7 +328,11 @@ namespace XnaToFna {
                         if (!str.StartsWith("Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\') {
                             Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
                             if (FixBrokenPaths) {
-                                str = ((string) instruction.Operand).Replace('\\', Path.DirectorySeparatorChar);
+                                //str = ((string) instruction.Operand).Replace('\\', Path.DirectorySeparatorChar);
+                                ILProcessor il = method.Body.GetILProcessor();
+                                
+                                il.InsertAfter(instruction, il.Create(OpCodes.Call, Module.Import(xtf_Methods["PatchPath"])));
+                                
                                 pathFixed = true;
                             }
                         }
@@ -436,6 +445,15 @@ namespace XnaToFna {
         }
         
         public static void Main(string[] args) {
+            Console.WriteLine("Loading XnaToFna");
+            XTF = ModuleDefinition.ReadModule(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            
+            Console.WriteLine("Preparing references to XnaToFnaHelper");
+            xtf_Helper = XTF.GetType("XnaToFna.XnaToFnaHelper");
+            foreach (MethodDefinition method in xtf_Helper.Methods) {
+                xtf_Methods[method.Name] = method;
+            }
+            
             Console.WriteLine("Loading FNA");
             FNA = ModuleDefinition.ReadModule("FNA.dll");
 
