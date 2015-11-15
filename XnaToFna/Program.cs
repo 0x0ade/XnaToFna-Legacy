@@ -328,7 +328,7 @@ namespace XnaToFna {
                             }
                         }
                         
-                        if (str.StartsWith(Path.DirectorySeparatorChar + "Content" + Path.DirectorySeparatorChar) && !File.Exists("." + str)) {
+                        if (str.StartsWith(Path.DirectorySeparatorChar + "Content" + Path.DirectorySeparatorChar) && !File.Exists("." + str) && !Directory.Exists("." + str)) {
                             Console.WriteLine("Broken path (File not found - case?) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
                             if (FixBrokenPaths) {
                                 string found = "."+Path.DirectorySeparatorChar;
