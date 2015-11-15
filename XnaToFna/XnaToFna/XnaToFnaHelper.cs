@@ -5,7 +5,7 @@ namespace XnaToFna {
     public static class XnaToFnaHelper {
         
         public static string PatchPath(this string str) {
-            return str.Replace('\\', Path.DirectorySeparatorChar);
+            return str.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
         }
         
     }
