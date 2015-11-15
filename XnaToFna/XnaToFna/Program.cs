@@ -325,12 +325,12 @@ namespace XnaToFna {
                         string str = (string) instruction.Operand;
                         bool pathFixed = false;
                         
-                        if (!str.StartsWith("Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\') {
+                        if (!str.StartsWith("Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\' && (instruction.Next.OpCode != OpCodes.Call || ((MethodReference) instruction.Next.Operand).DeclaringType.Scope.Name != "XnaToFna")) {
                             Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
                             if (FixBrokenPaths) {
-                                //str = ((string) instruction.Operand).Replace('\\', Path.DirectorySeparatorChar);
                                 ILProcessor il = method.Body.GetILProcessor();
                                 
+                                //FIXME this makes the assembly read-only via Mono.Cecil...
                                 il.InsertAfter(instruction, il.Create(OpCodes.Call, Module.Import(xtf_Methods["PatchPath"])));
                                 
                                 pathFixed = true;
