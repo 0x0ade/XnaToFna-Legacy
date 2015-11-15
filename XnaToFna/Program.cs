@@ -6,8 +6,10 @@ namespace XnaToFna {
     static class Program {
 
         private static ModuleDefinition FNA;
+        private static bool FixBrokenPaths = false;
         
         private static ModuleDefinition Module;
+
         
         private static TypeReference ImportIfNeeded(this ModuleDefinition module, TypeReference r) {
             return r == null ? null : r.Module.Name != module.Name ? module.Import(r) : r;
@@ -313,6 +315,15 @@ namespace XnaToFna {
                 for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
                     Instruction instruction = method.Body.Instructions[ii];
                     
+                    if (instruction.OpCode == OpCodes.Ldstr && ((string) instruction.Operand).Contains("\\")) {
+                        if (FixBrokenPaths) {
+                            instruction.Operand = ((string) instruction.Operand).Replace("\\", "/");
+                        } else {
+                            Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
+                        }
+                        continue;
+                    }
+                    
                     if (instruction.Operand is TypeReference) {
                         instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
                     } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
@@ -354,6 +365,12 @@ namespace XnaToFna {
             FNA = ModuleDefinition.ReadModule("FNA.dll");
 
             foreach (string arg in args) {
+                if (arg == "--paths") {
+                    FixBrokenPaths = !FixBrokenPaths;
+                    Console.WriteLine("Fixing broken paths has been " + (FixBrokenPaths ? "en" : "dis") + "abled.");
+                    continue;
+                }
+                
                 Console.WriteLine("Patching " + arg);
                 Module = ModuleDefinition.ReadModule(arg);
 
