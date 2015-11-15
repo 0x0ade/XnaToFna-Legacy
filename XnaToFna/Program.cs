@@ -60,23 +60,55 @@ namespace XnaToFna {
             return r.DeclaringType.IsXNA() || r.FieldType.IsXNA();
         }
         
-        private static string ReplaceGenerics(string str, MethodReference method, TypeReference type) {
-            //FNA is weird... or Cecil
-            /*if (!type.HasGenericParameters) {
+        private static string MakeMethodNameFindFriendly(string str, MethodReference method, TypeReference type, bool inner = false) {
+            if (!inner) {
+                int indexOfMethodDoubleColons = str.IndexOf("::");
+                
+                //screw generic parameters - remove them!
+                int open = str.IndexOf("<", indexOfMethodDoubleColons);
+                if (-1 < open) {
+                    //let's just pretend generics in generics don't exist
+                    int close = str.IndexOf(">", open);
+                    str = str.Substring(0, open) + str.Substring(close + 1);
+                }
+                
+                //screw multidimensional arrays - replace them!
+                open = str.IndexOf("[");
+                if (-1 < open && open < indexOfMethodDoubleColons) {
+                    int close = str.IndexOf("]", open);
+                    str = str.Substring(0, open) + "[n]" + str.Substring(close + 1);
+                }
+                
+                open = str.IndexOf("(", indexOfMethodDoubleColons);
+                if (-1 < open) {
+                    //Methods without () would be weird...
+                    //Well, make the params find-friendly
+                    int close = str.IndexOf(")", open);
+                    str = str.Substring(0, open) + MakeMethodNameFindFriendly(str.Substring(open, close - open + 1), method, type, true) + str.Substring(close + 1);
+                }
+                
                 return str;
-            }*/
-            for (int i = 0; i < type.GenericParameters.Count; i++) {
-                str = str.Replace(type.GenericParameters[i].Name, "!"+i);
             }
-            /*for (int i = 0; i < method.GenericParameters.Count; i++) {
-                str = str.Replace(method.GenericParameters[i].Name, "!!"+i);
-            }*/
-            //screw this - remove all generic stuff!
-            int genOpen = str.IndexOf("<", str.IndexOf("::"));
-            if (genOpen > -1) {
-                //let's just pretend generic in generics don't exist
-                int genClose = str.IndexOf(">", genOpen);
-                str = str.Substring(0, genOpen) + str.Substring(genClose + 1);
+            
+            for (int i = 0; i < type.GenericParameters.Count; i++) {
+                str = str.Replace("("+type.GenericParameters[i].Name+",", "(!"+i+",");
+                str = str.Replace(","+type.GenericParameters[i].Name+",", ",!"+i+",");
+                str = str.Replace(","+type.GenericParameters[i].Name+")", ",!"+i+")");
+                str = str.Replace("("+type.GenericParameters[i].Name+")", "(!"+i+")");
+                int param = str.IndexOf(type.GenericParameters[i].Name+"[");
+                if (-1 < param) {
+                    str = str.Substring(0, param) + "!"+i + str.Substring(param + type.GenericParameters[i].Name.Length);
+                }
+            }
+            for (int i = 0; i < method.GenericParameters.Count; i++) {
+                str = str.Replace("("+method.GenericParameters[i].Name+",", "(!!"+i+",");
+                str = str.Replace(","+method.GenericParameters[i].Name+",", ",!!"+i+",");
+                str = str.Replace(","+method.GenericParameters[i].Name+")", ",!!"+i+")");
+                str = str.Replace("("+method.GenericParameters[i].Name+")", "(!!"+i+")");
+                int param = str.IndexOf(method.GenericParameters[i].Name+"[");
+                if (-1 < param) {
+                    str = str.Substring(0, param) + "!!"+i + str.Substring(param + method.GenericParameters[i].Name.Length);
+                }
             }
             return str;
         }
@@ -89,7 +121,7 @@ namespace XnaToFna {
             }
             TypeReference foundType = type.IsXNA() ? FNA.GetType(type.FullName) : null;
             if (foundType == null && type.IsByReference) {
-                foundType = type.GetElementType().FindFNA(context);
+                foundType = new ByReferenceType(type.GetElementType().FindFNA(context));
             }
             if (foundType == null && type.IsArray) {
                 foundType = new ArrayType(Module.ImportIfNeeded(type.GetElementType().FindFNA(context)));
@@ -139,19 +171,17 @@ namespace XnaToFna {
             TypeReference findTypeRef = method.DeclaringType.FindFNA(context, false);
             TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsDefinition ? (TypeDefinition) findTypeRef : findTypeRef.Resolve();
             
-            if (findType != null) {
+            if (findType != null && !method.DeclaringType.IsArray) {
                 string methodName = method.FullName;
                 methodName = methodName.Substring(methodName.IndexOf(" ") + 1);
-                methodName = ReplaceGenerics(methodName, method, findType);
-                //Console.WriteLine("debug m -1 / " + (findType.Methods.Count - 1) + ": " + methodName);
+                methodName = MakeMethodNameFindFriendly(methodName, method, findType);
                 for (int ii = 0; ii < findType.Methods.Count; ii++) {
                     MethodReference foundMethod = findType.Methods[ii];
                     string foundMethodName = foundMethod.FullName;
                     foundMethodName = foundMethodName.Replace(findType.FullName, findTypeRef.FullName);
                     foundMethodName = foundMethodName.Substring(foundMethodName.IndexOf(" ") + 1);
                     //TODO find a better way to compare methods / fix comparing return types
-                    foundMethodName = ReplaceGenerics(foundMethodName, foundMethod, findType);
-                    //Console.WriteLine("debug m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
+                    foundMethodName = MakeMethodNameFindFriendly(foundMethodName, foundMethod, findType);
 
                     if (methodName == foundMethodName) {
                         foundMethod = Module.ImportIfNeeded(foundMethod);
@@ -188,11 +218,29 @@ namespace XnaToFna {
                 }
             }
 
-            Console.WriteLine("Method not found     : " + method.FullName);
-            Console.WriteLine("Found type reference : " + findTypeRef);
-            Console.WriteLine("Found type definition: " + findType);
-            if (findTypeRef != null) {
-                Console.WriteLine("Found type scope     : " + findTypeRef.Scope.Name);
+            if (!method.DeclaringType.IsArray) {
+                Console.WriteLine("Method not found     : " + method.FullName);
+                Console.WriteLine("Found type reference : " + findTypeRef);
+                Console.WriteLine("Found type definition: " + findType);
+                if (findTypeRef != null) {
+                    Console.WriteLine("Found type scope     : " + findTypeRef.Scope.Name);
+                }
+                
+                if (findType != null) {
+                    string methodName = method.FullName;
+                    methodName = methodName.Substring(methodName.IndexOf(" ") + 1);
+                    methodName = MakeMethodNameFindFriendly(methodName, method, findType);
+                    Console.WriteLine("debug m -1 / " + (findType.Methods.Count - 1) + ": " + methodName);
+                    for (int ii = 0; ii < findType.Methods.Count; ii++) {
+                        MethodReference foundMethod = findType.Methods[ii];
+                        string foundMethodName = foundMethod.FullName;
+                        foundMethodName = foundMethodName.Replace(findType.FullName, findTypeRef.FullName);
+                        foundMethodName = foundMethodName.Substring(foundMethodName.IndexOf(" ") + 1);
+                        //TODO find a better way to compare methods / fix comparing return types
+                        foundMethodName = MakeMethodNameFindFriendly(foundMethodName, foundMethod, findType);
+                        Console.WriteLine("debug m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
+                    }
+                }
             }
             
             if (findTypeRef == null) {
@@ -269,22 +317,7 @@ namespace XnaToFna {
                         instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
                     } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
                         instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
-                    } /*else if (instruction.Operand is MethodReference) {
-                        MethodReference methodr = (MethodReference) instruction.Operand;
-                        
-                        MethodReference genMethod = new MethodReference(methodr.Name, methodr.ReturnType.FindFNA(method), methodr.DeclaringType.FindFNA(method));
-                        genMethod.CallingConvention = methodr.CallingConvention;
-                        genMethod.HasThis = methodr.HasThis;
-                        genMethod.ExplicitThis = methodr.ExplicitThis;
-                        for (int iii = 0; iii < methodr.GenericParameters.Count; iii++) {
-                            genMethod.GenericParameters.Add((GenericParameter) methodr.Parameters[iii].ParameterType.FindFNA(genMethod));
-                        }
-                        for (int iii = 0; iii < methodr.Parameters.Count; iii++) {
-                            genMethod.Parameters.Add(new ParameterDefinition(methodr.Parameters[iii].ParameterType.FindFNA(genMethod)));
-                        }
-                        
-                        instruction.Operand = Module.Import(genMethod);
-                    }*/ else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
+                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
                         FieldReference field = (FieldReference) instruction.Operand;
     
                         TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
