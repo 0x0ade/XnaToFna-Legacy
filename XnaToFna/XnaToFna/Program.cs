@@ -179,10 +179,13 @@ namespace XnaToFna {
             TypeReference findTypeRef = method.DeclaringType.FindFNA(context, false);
             TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsDefinition ? (TypeDefinition) findTypeRef : findTypeRef.Resolve();
             
-            if (findType != null && !method.DeclaringType.IsArray) {
+            if (findType != null) {
+                bool typeMismatch = findType.FullName != method.DeclaringType.FullName;
+
                 string methodName = method.FullName;
                 methodName = methodName.Substring(methodName.IndexOf(" ") + 1);
                 methodName = MakeMethodNameFindFriendly(methodName, method, findType);
+
                 for (int ii = 0; ii < findType.Methods.Count; ii++) {
                     MethodReference foundMethod = findType.Methods[ii];
                     string foundMethodName = foundMethod.FullName;
@@ -192,35 +195,37 @@ namespace XnaToFna {
                     foundMethodName = MakeMethodNameFindFriendly(foundMethodName, foundMethod, findType);
 
                     if (methodName == foundMethodName) {
-                        foundMethod = Module.ImportIfNeeded(foundMethod);
-                        
-                        if (method.DeclaringType.IsGenericInstance) {
+                        if (typeMismatch && method.DeclaringType.IsGenericInstance) {
                             //TODO test return type context
                             MethodReference genMethod = new MethodReference(method.Name, FindFNA(method.ReturnType, findTypeRef), findTypeRef);
                             genMethod.CallingConvention = method.CallingConvention;
                             genMethod.HasThis = method.HasThis;
                             genMethod.ExplicitThis = method.ExplicitThis;
                             for (int i = 0; i < method.GenericParameters.Count; i++) {
-                                genMethod.GenericParameters.Add((GenericParameter) FindFNA(method.GenericParameters[i], genMethod));
+                                genMethod.GenericParameters.Add((GenericParameter) (FindFNA(method.GenericParameters[i], genMethod, false) ?? FindFNA(method.GenericParameters[i], findTypeRef)));
                             }
                             for (int i = 0; i < method.Parameters.Count; i++) {
                                 genMethod.Parameters.Add(new ParameterDefinition(FindFNA(method.Parameters[i].ParameterType, genMethod)));
                             }
-                            
-                            foundMethod = Module.ImportIfNeeded(genMethod);
+
+                            foundMethod = Module.Import(genMethod);
                         }
-                        
+
+                        if (foundMethod.Module != Module) {
+                            foundMethod = Module.Import(foundMethod);
+                        }
+
                         if (method.IsGenericInstance) {
                             GenericInstanceMethod genMethod = new GenericInstanceMethod(foundMethod);
                             GenericInstanceMethod methodg = ((GenericInstanceMethod) method);
-                            
+
                             for (int i = 0; i < methodg.GenericArguments.Count; i++) {
-                                genMethod.GenericArguments.Add(FindFNA(methodg.GenericArguments[i], genMethod));
+                                genMethod.GenericArguments.Add(FindFNA(methodg.GenericArguments[i], context, false) ?? FindFNA(methodg.GenericArguments[i], genMethod, true));
                             }
-                            
+
                             foundMethod = genMethod;
                         }
-                        
+
                         return foundMethod;
                     }
                 }
@@ -228,12 +233,13 @@ namespace XnaToFna {
 
             if (!method.DeclaringType.IsArray) {
                 Console.WriteLine("Method not found     : " + method.FullName);
+                Console.WriteLine("Method type scope    : " + method.DeclaringType.Scope.Name);
                 Console.WriteLine("Found type reference : " + findTypeRef);
                 Console.WriteLine("Found type definition: " + findType);
                 if (findTypeRef != null) {
                     Console.WriteLine("Found type scope     : " + findTypeRef.Scope.Name);
                 }
-                
+
                 if (findType != null) {
                     string methodName = method.FullName;
                     methodName = methodName.Substring(methodName.IndexOf(" ") + 1);
@@ -250,11 +256,11 @@ namespace XnaToFna {
                     }
                 }
             }
-            
+
             if (findTypeRef == null) {
                 return method;
             }
-            
+
             MethodReference fbgenMethod = new MethodReference(method.Name, FindFNA(method.ReturnType, findTypeRef), findTypeRef);
             fbgenMethod.CallingConvention = method.CallingConvention;
             fbgenMethod.HasThis = method.HasThis;
@@ -265,18 +271,18 @@ namespace XnaToFna {
             for (int i = 0; i < method.Parameters.Count; i++) {
                 fbgenMethod.Parameters.Add(new ParameterDefinition(FindFNA(method.Parameters[i].ParameterType, fbgenMethod)));
             }
-            
+
             if (method.IsGenericInstance) {
                 GenericInstanceMethod genMethod = new GenericInstanceMethod(fbgenMethod);
                 GenericInstanceMethod methodg = ((GenericInstanceMethod) method);
-                
+
                 for (int i = 0; i < methodg.GenericArguments.Count; i++) {
                     genMethod.GenericArguments.Add(FindFNA(methodg.GenericArguments[i], genMethod));
                 }
-                
+
                 fbgenMethod = genMethod;
             }
-            
+
             return fbgenMethod;
         }
 
