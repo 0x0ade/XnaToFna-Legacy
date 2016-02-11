@@ -129,44 +129,62 @@ namespace XnaToFna {
             }
             TypeReference foundType = type.IsXNA() ? FNA.GetType(type.FullName) : null;
             if (foundType == null && type.IsByReference) {
-                foundType = new ByReferenceType(type.GetElementType().FindFNA(context));
+                foundType = new ByReferenceType(((ByReferenceType) type).ElementType.FindFNA(context));
             }
             if (foundType == null && type.IsArray) {
-                foundType = new ArrayType(Module.ImportIfNeeded(type.GetElementType().FindFNA(context)));
+                foundType = new ArrayType(Module.ImportIfNeeded(((ArrayType) type).ElementType.FindFNA(context)));
             }
             if (foundType == null && context != null && type.IsGenericParameter) {
                 foundType = type.FindFNAGeneric(context); 
             }
             if (foundType == null && context != null && type.IsGenericInstance) {
-                foundType = new GenericInstanceType(Module.ImportIfNeeded(type.GetElementType().FindFNA(context)));
+                foundType = new GenericInstanceType(Module.ImportIfNeeded(((GenericInstanceType) type).ElementType.FindFNA(context)));
                 foreach (TypeReference genericArgument in ((GenericInstanceType) type).GenericArguments) {
                     ((GenericInstanceType) foundType).GenericArguments.Add(Module.ImportIfNeeded(genericArgument.FindFNA(context)));
                 }
             }
             if (type.IsXNA() && foundType == null) {
-                Console.WriteLine("Could not find type " + type.FullName);
+                Console.WriteLine("debug: Could not find type " + type.FullName + " [" + type.Scope.Name + "] in FNA!");
             }
             return (type.IsXNA() ? Module.ImportIfNeeded(foundType) : null) ?? (fallbackOnXNA || !type.Scope.Name.StartsWith("Microsoft.Xna.Framework") ? type : null);
         }
 
         private static TypeReference FindFNAGeneric(this TypeReference type, MemberReference context) {
             if (context is MethodReference) {
-                for (int gi = 0; gi < ((MethodReference) context).GenericParameters.Count; gi++) {
-                    GenericParameter genericParam = ((MethodReference) context).GenericParameters[gi];
+                MethodReference r = ((MethodReference) context).GetElementMethod();
+                for (int gi = 0; gi < r.GenericParameters.Count; gi++) {
+                    GenericParameter genericParam = r.GenericParameters[gi];
                     if (genericParam.FullName == type.FullName) {
+                        //TODO variables hate me, import otherwise
                         return genericParam;
+                    }
+                }
+                if (type.Name.StartsWith("!!")) {
+                    int i;
+                    if (int.TryParse(type.Name.Substring(2), out i)) {
+                        return r.GenericParameters[i];
                     }
                 }
             }
             if (context is TypeReference) {
-                for (int gi = 0; gi < ((TypeReference) context).GenericParameters.Count; gi++) {
-                    GenericParameter genericParam = ((TypeReference) context).GenericParameters[gi];
+                TypeReference r = ((TypeReference) context).GetElementType();
+                for (int gi = 0; gi < r.GenericParameters.Count; gi++) {
+                    GenericParameter genericParam = r.GenericParameters[gi];
                     if (genericParam.FullName == type.FullName) {
+                        //TODO variables hate me, import otherwise
                         return genericParam;
                     }
                 }
+                if (type.Name.StartsWith("!!")) {
+                    return type.FindFNAGeneric(context.DeclaringType);
+                } else if (type.Name.StartsWith("!")) {
+                    int i;
+                    if (int.TryParse(type.Name.Substring(1), out i)) {
+                        return r.GenericParameters[i];
+                    }
+                }
             }
-            if (context.DeclaringType != null) {
+            if (context != null && context.DeclaringType != null) {
                 return type.FindFNAGeneric(context.DeclaringType);
             }
             return type;
@@ -177,7 +195,7 @@ namespace XnaToFna {
                 return method;
             }
             TypeReference findTypeRef = method.DeclaringType.FindFNA(context, false);
-            TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsDefinition ? (TypeDefinition) findTypeRef : findTypeRef.Resolve();
+            TypeDefinition findType = findTypeRef == null || findTypeRef.IsArray ? null : findTypeRef.Resolve();
             
             if (findType != null) {
                 bool typeMismatch = findType.FullName != method.DeclaringType.FullName;
@@ -232,19 +250,19 @@ namespace XnaToFna {
             }
 
             if (!method.DeclaringType.IsArray) {
-                Console.WriteLine("Method not found     : " + method.FullName);
-                Console.WriteLine("Method type scope    : " + method.DeclaringType.Scope.Name);
-                Console.WriteLine("Found type reference : " + findTypeRef);
-                Console.WriteLine("Found type definition: " + findType);
+                Console.WriteLine("debug: Method not found     : " + method.FullName);
+                Console.WriteLine("debug: Method type scope    : " + method.DeclaringType.Scope.Name);
+                Console.WriteLine("debug: Found type reference : " + findTypeRef);
+                Console.WriteLine("debug: Found type definition: " + findType);
                 if (findTypeRef != null) {
-                    Console.WriteLine("Found type scope     : " + findTypeRef.Scope.Name);
+                    Console.WriteLine("debug: Found type scope     : " + findTypeRef.Scope.Name);
                 }
 
                 if (findType != null) {
                     string methodName = method.FullName;
                     methodName = methodName.Substring(methodName.IndexOf(" ") + 1);
                     methodName = MakeMethodNameFindFriendly(methodName, method, findType);
-                    Console.WriteLine("debug m -1 / " + (findType.Methods.Count - 1) + ": " + methodName);
+                    Console.WriteLine("debug: m -1 / " + (findType.Methods.Count - 1) + ": " + methodName);
                     for (int ii = 0; ii < findType.Methods.Count; ii++) {
                         MethodReference foundMethod = findType.Methods[ii];
                         string foundMethodName = foundMethod.FullName;
@@ -252,7 +270,7 @@ namespace XnaToFna {
                         foundMethodName = foundMethodName.Substring(foundMethodName.IndexOf(" ") + 1);
                         //TODO find a better way to compare methods / fix comparing return types
                         foundMethodName = MakeMethodNameFindFriendly(foundMethodName, foundMethod, findType);
-                        Console.WriteLine("debug m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
+                        Console.WriteLine("debug: m "+ii+" / " + (findType.Methods.Count - 1) + ": " + foundMethodName);
                     }
                 }
             }
@@ -337,8 +355,9 @@ namespace XnaToFna {
                             (!str.StartsWith("Content\\") || str == "Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\' &&
                             (instruction.Next.OpCode != OpCodes.Call || ((MethodReference) instruction.Next.Operand).Name != "PatchPath")
                         ) {
-                            Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + str);
+                            //this is quite "harmless" and spammed STDOUT.
                             if (FixBrokenPaths) {
+                                Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + str);
                                 ILProcessor il = method.Body.GetILProcessor();
                                 
                                 //FIXME this makes the assembly read-only via Mono.Cecil...
@@ -435,10 +454,9 @@ namespace XnaToFna {
                                     break;
                                 }
                             }
-                            if (level >= levels.Length) {
-                                found = found.Substring(startIndex);
+                            if (level >= levels.Length && (found = found.Substring(startIndex)) != strOrig) {
                                 if (found != str.Substring(startIndex - 1)) {
-                                    Console.WriteLine("Broken path (case mismatch) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + strOrig);
+                                    Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + strOrig);
                                     if (FixBrokenPaths) {
                                         str = found;
                                         pathFixed = true;
@@ -460,6 +478,8 @@ namespace XnaToFna {
                         continue;
                     }
                     
+                    //Does this even fix anything? The above path fixes should fix this.
+                    /*
                     if (instruction.OpCode == OpCodes.Ldstr && ((string) instruction.Operand).Contains("\\")) {
                         if (FixBrokenPaths) {
                             instruction.Operand = ((string) instruction.Operand).Replace("\\", "/");
@@ -467,6 +487,7 @@ namespace XnaToFna {
                             Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
                         }
                     }
+                    */
                     
                     if (instruction.Operand is TypeReference) {
                         instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
@@ -506,7 +527,7 @@ namespace XnaToFna {
         
         public static void Main(string[] args) {
             Console.WriteLine("Loading XnaToFna");
-            XTF = ModuleDefinition.ReadModule(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            XTF = ModuleDefinition.ReadModule(System.Reflection.Assembly.GetExecutingAssembly().Location, new ReaderParameters(ReadingMode.Immediate));
             
             Console.WriteLine("Preparing references to XnaToFnaHelper");
             xtf_Helper = XTF.GetType("XnaToFna.XnaToFnaHelper");
@@ -515,7 +536,7 @@ namespace XnaToFna {
             }
             
             Console.WriteLine("Loading FNA");
-            FNA = ModuleDefinition.ReadModule("FNA.dll");
+            FNA = ModuleDefinition.ReadModule("FNA.dll", new ReaderParameters(ReadingMode.Immediate));
 
             foreach (string arg in args) {
                 if (arg == "--paths") {
@@ -525,7 +546,7 @@ namespace XnaToFna {
                 }
                 
                 Console.WriteLine("Patching " + arg);
-                Module = ModuleDefinition.ReadModule(arg);
+                Module = ModuleDefinition.ReadModule(arg, new ReaderParameters(ReadingMode.Immediate));
 
                 for (int i = 0; i < Module.AssemblyReferences.Count; i++) {
                     if (Module.AssemblyReferences[i].Name.StartsWith("Microsoft.Xna.Framework.")) {
@@ -552,7 +573,7 @@ namespace XnaToFna {
                 Module.Write(arg);
                 //For those brave enough: Feel free to fix the error caused by uncommenting the following lines.
                 //FIXME find the cause of the unreadwritability bug
-                //Module = ModuleDefinition.ReadModule(arg);
+                //Module = ModuleDefinition.ReadModule(arg, new ReaderParameters(ReadingMode.Immediate));
                 //Module.Write(arg);
             }
         }
