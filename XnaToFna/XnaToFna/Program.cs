@@ -68,55 +68,143 @@ namespace XnaToFna {
             return r.DeclaringType.IsXNA() || r.FieldType.IsXNA();
         }
         
-        private static string MakeMethodNameFindFriendly(string str, MethodReference method, TypeReference type, bool inner = false) {
+        private static string MakeMethodNameFindFriendly(string str, MethodReference method, TypeReference type, bool inner = false, string[] genParams = null) {
+            while (method.IsGenericInstance) {
+                method = ((GenericInstanceMethod) method).ElementMethod;
+            }
+
             if (!inner) {
                 int indexOfMethodDoubleColons = str.IndexOf("::");
-                
-                //screw generic parameters - remove them!
-                int open = str.IndexOf("<", indexOfMethodDoubleColons);
-                if (-1 < open) {
-                    //let's just pretend generics in generics don't exist
-                    int close = str.IndexOf(">", open);
-                    str = str.Substring(0, open) + str.Substring(close + 1);
+                int openArgs = str.IndexOf("(", indexOfMethodDoubleColons);
+                int numGenParams = 0;
+
+                //screw generic parameters - replace them!
+                int open = indexOfMethodDoubleColons;
+                if (-1 < (open = str.IndexOf("<", open + 1)) && open < openArgs) {
+                    int close_ = open;
+                    int close = close_;
+                    while (-1 < (close_ = str.IndexOf(">", close_ + 1)) && close_ < openArgs) {
+                        close = close_;
+                    }
+
+                    numGenParams = method.GenericParameters.Count;
+                    if (numGenParams == 0) {
+                        numGenParams = 1;
+                        //GenericParams.Count is 0 (WHY?) so we must count ,s
+                        int level = 0;
+                        for (int i = open; i < close; i++) {
+                            if (str[i] == '<') {
+                                level++;
+                            } else if (str[i] == '>') {
+                                level--;
+                            } else if (str[i] == ',' && level == 0) {
+                                numGenParams++;
+                            }
+                        }
+                        genParams = new string[numGenParams];
+                        int j = 0;
+                        //Simply approximate that the generic parameters MUST exist in the parameters in correct order...
+                        for (int i = 0; i < method.Parameters.Count && j < genParams.Length; i++) {
+                            TypeReference paramType = method.Parameters[i].ParameterType;
+                            while (paramType.IsArray || paramType.IsByReference) {
+                                paramType = paramType.GetElementType();
+                            }
+                            if (paramType.IsGenericParameter) {
+                                genParams[j] = paramType.Name;
+                                j++;
+                            }
+                        }
+                    }
+
+                    str = str.Substring(0, open + 1) + numGenParams + str.Substring(close);
+                    openArgs = str.IndexOf("(", indexOfMethodDoubleColons);
                 }
-                
+
+                //add them if missing
+                open = str.IndexOf("<", indexOfMethodDoubleColons);
+                if ((open <= -1 || openArgs < open) && method.HasGenericParameters) {
+                    int pos = indexOfMethodDoubleColons + 2 + method.Name.Length;
+                    str = str.Substring(0, pos) + "<" + method.GenericParameters.Count + ">" + str.Substring(pos);
+                    openArgs = str.IndexOf("(", indexOfMethodDoubleColons);
+                }
+
                 //screw multidimensional arrays - replace them!
                 open = str.IndexOf("[");
                 if (-1 < open && open < indexOfMethodDoubleColons) {
                     int close = str.IndexOf("]", open);
-                    str = str.Substring(0, open) + "[n]" + str.Substring(close + 1);
+                    int n = 1;
+                    int i = open;
+                    while (-1 < (i = str.IndexOf(",", i + 1)) && i < close) {
+                        n++;
+                    }
+                    str = str.Substring(0, open + 1) + n + str.Substring(close);
+                    openArgs = str.IndexOf("(", indexOfMethodDoubleColons);
                 }
-                
-                open = str.IndexOf("(", indexOfMethodDoubleColons);
+
+                if (method.GenericParameters.Count != 0) {
+                    numGenParams = method.GenericParameters.Count;
+                    genParams = new string[numGenParams];
+                    for (int i = 0; i < method.GenericParameters.Count; i++) {
+                        genParams[i] = method.GenericParameters[i].Name;
+                    }
+                }
+
+                //screw arg~ oh, wait, that's what we're trying to fix. Continue on.
+                open = openArgs;
                 if (-1 < open) {
                     //Methods without () would be weird...
                     //Well, make the params find-friendly
                     int close = str.IndexOf(")", open);
-                    str = str.Substring(0, open) + MakeMethodNameFindFriendly(str.Substring(open, close - open + 1), method, type, true) + str.Substring(close + 1);
+                    str = str.Substring(0, open) + MakeMethodNameFindFriendly(str.Substring(open, close - open + 1), method, type, true, genParams) + str.Substring(close + 1);
+                    openArgs = str.IndexOf("(", indexOfMethodDoubleColons);
                 }
-                
+
                 return str;
             }
-            
+
             for (int i = 0; i < type.GenericParameters.Count; i++) {
                 str = str.Replace("("+type.GenericParameters[i].Name+",", "(!"+i+",");
                 str = str.Replace(","+type.GenericParameters[i].Name+",", ",!"+i+",");
                 str = str.Replace(","+type.GenericParameters[i].Name+")", ",!"+i+")");
                 str = str.Replace("("+type.GenericParameters[i].Name+")", "(!"+i+")");
-                int param = str.IndexOf(type.GenericParameters[i].Name+"[");
-                if (-1 < param) {
-                    str = str.Substring(0, param) + "!"+i + str.Substring(param + type.GenericParameters[i].Name.Length);
-                }
+
+                str = str.Replace("("+type.GenericParameters[i].Name+"&", "(!"+i+"&");
+                str = str.Replace(","+type.GenericParameters[i].Name+"&", ",!"+i+"&");
+                str = str.Replace(","+type.GenericParameters[i].Name+"&", ",!"+i+"&");
+                str = str.Replace("("+type.GenericParameters[i].Name+"&", "(!"+i+"&");
+
+                str = str.Replace("("+type.GenericParameters[i].Name+"[", "(!"+i+"[");
+                str = str.Replace(","+type.GenericParameters[i].Name+"[", ",!"+i+"[");
+                str = str.Replace(","+type.GenericParameters[i].Name+"[", ",!"+i+"[");
+                str = str.Replace("("+type.GenericParameters[i].Name+"[", "(!"+i+"[");
+
+                str = str.Replace("<"+type.GenericParameters[i].Name+",", "<!"+i+",");
+                str = str.Replace(","+type.GenericParameters[i].Name+">", ",!"+i+">");
+                str = str.Replace("<"+type.GenericParameters[i].Name+">", "<!"+i+">");
             }
-            for (int i = 0; i < method.GenericParameters.Count; i++) {
-                str = str.Replace("("+method.GenericParameters[i].Name+",", "(!!"+i+",");
-                str = str.Replace(","+method.GenericParameters[i].Name+",", ",!!"+i+",");
-                str = str.Replace(","+method.GenericParameters[i].Name+")", ",!!"+i+")");
-                str = str.Replace("("+method.GenericParameters[i].Name+")", "(!!"+i+")");
-                int param = str.IndexOf(method.GenericParameters[i].Name+"[");
-                if (-1 < param) {
-                    str = str.Substring(0, param) + "!!"+i + str.Substring(param + method.GenericParameters[i].Name.Length);
-                }
+            if (genParams == null) {
+                return str;
+            }
+
+            for (int i = 0; i < genParams.Length; i++) {
+                str = str.Replace("("+genParams[i]+",", "(!!"+i+",");
+                str = str.Replace(","+genParams[i]+",", ",!!"+i+",");
+                str = str.Replace(","+genParams[i]+")", ",!!"+i+")");
+                str = str.Replace("("+genParams[i]+")", "(!!"+i+")");
+
+                str = str.Replace("("+genParams[i]+"&", "(!!"+i+"&");
+                str = str.Replace(","+genParams[i]+"&", ",!!"+i+"&");
+                str = str.Replace(","+genParams[i]+"&", ",!!"+i+"&");
+                str = str.Replace("("+genParams[i]+"&", "(!!"+i+"&");
+
+                str = str.Replace("("+genParams[i]+"[", "(!!"+i+"[");
+                str = str.Replace(","+genParams[i]+"[", ",!!"+i+"[");
+                str = str.Replace(","+genParams[i]+"[", ",!!"+i+"[");
+                str = str.Replace("("+genParams[i]+"[", "(!!"+i+"[");
+
+                str = str.Replace("<"+genParams[i]+",", "<!!"+i+",");
+                str = str.Replace(","+genParams[i]+">", ",!!"+i+">");
+                str = str.Replace("<"+genParams[i]+">", "<!!"+i+">");
             }
             return str;
         }
