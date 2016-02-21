@@ -419,6 +419,10 @@ namespace XnaToFna {
                 type.BaseType = type.BaseType.FindFNA(type);
             }
             
+            for (int i = 0; i < type.Interfaces.Count; i++) {
+                type.Interfaces[i] = FindFNA(type.Interfaces[i], type, true);
+            }
+            
             for (int ii = 0; ii < type.Fields.Count; ii++) {
                  FieldDefinition field = type.Fields[ii];
                  if (!field.FieldType.IsIn(XNAScope)) {
