@@ -9,12 +9,16 @@ namespace XnaToFna {
 
         private static ModuleDefinition XTF;
         private static ModuleDefinition FNA;
+        private static ModuleDefinition MGNET;
         private static bool FixBrokenPaths = false;
         
         private static TypeDefinition xtf_Helper;
         private static Dictionary<string, MethodDefinition> xtf_Methods = new Dictionary<string, MethodDefinition>();
         
         private static ModuleDefinition Module;
+        
+        private static string[] XNAScope = {"Microsoft.Xna.Framework", "FNA"};
+        private static string[] NETNSScope = {"Microsoft.Xna.Framework.Net", "MonoGame.Framework.Net"}; //TODO the latter is just guessed
 
         
         private static TypeReference ImportIfNeeded(this ModuleDefinition module, TypeReference r) {
@@ -27,45 +31,50 @@ namespace XnaToFna {
             return r == null ? null : r.Module.Name != module.Name ? module.Import(r) : r;
         }
         
-        private static bool IsXNA(this TypeReference r) {
+        private static bool IsIn(this TypeReference r, params string[] scope) {
             if (r == null) {
                 return false;
             }
-            if (r.GetElementType() != null && r.GetElementType() != r && r.GetElementType().IsXNA()) {
+            if (r.GetElementType() != null && r.GetElementType() != r && r.GetElementType().IsIn(scope)) {
                 return true;
             }
             if (r.IsGenericInstance) {
                 foreach (TypeReference genericArgument in ((GenericInstanceType) r).GenericArguments) {
-                    if (genericArgument.IsXNA()) {
+                    if (genericArgument.IsIn(scope)) {
                         return true;
                     }
                 }
             }
-            return r.Scope.Name.Contains("Microsoft.Xna.Framework") || r.Scope.Name.Contains("FNA");
+            for (int i = 0; i < scope.Length; i++) {
+                if (r.Scope.Name.Contains(scope[i])) {
+                    return true;
+                }
+            }
+            return false;
         }
-        private static bool IsXNA(this MethodReference r) {
+        private static bool IsIn(this MethodReference r, params string[] scope) {
             if (r == null) {
                 return false;
             }
             if (r.IsGenericInstance) {
                 foreach (TypeReference genericArgument in ((GenericInstanceMethod) r).GenericArguments) {
-                    if (genericArgument.IsXNA()) {
+                    if (genericArgument.IsIn(scope)) {
                         return true;
                     }
                 }
             }
             for (int i = 0; i < r.Parameters.Count; i++) {
-                if (r.Parameters[i].ParameterType.IsXNA()) {
+                if (r.Parameters[i].ParameterType.IsIn(scope)) {
                     return true;
                 }
             }
-            return r.DeclaringType.IsXNA() || r.ReturnType.IsXNA();
+            return r.DeclaringType.IsIn(scope) || r.ReturnType.IsIn(scope);
         }
-        private static bool IsXNA(this FieldReference r) {
+        private static bool IsIn(this FieldReference r, params string[] scope) {
             if (r == null) {
                 return false;
             }
-            return r.DeclaringType.IsXNA() || r.FieldType.IsXNA();
+            return r.DeclaringType.IsIn(scope) || r.FieldType.IsIn(scope);
         }
         
         private static string MakeMethodNameFindFriendly(string str, MethodReference method, TypeReference type, bool inner = false, string[] genParams = null) {
@@ -215,7 +224,12 @@ namespace XnaToFna {
                 Console.WriteLine(Environment.StackTrace);
                 return null;
             }
-            TypeReference foundType = type.IsXNA() ? FNA.GetType(type.FullName) : null;
+            TypeReference foundType = null;
+            if (type.IsIn(NETNSScope)) {
+                foundType = MGNET.GetType(type.FullName);
+            } else if (type.IsIn(XNAScope)) {
+                foundType = FNA.GetType(type.FullName);
+            }
             if (foundType == null && type.IsByReference) {
                 foundType = new ByReferenceType(((ByReferenceType) type).ElementType.FindFNA(context));
             }
@@ -231,10 +245,10 @@ namespace XnaToFna {
                     ((GenericInstanceType) foundType).GenericArguments.Add(Module.ImportIfNeeded(genericArgument.FindFNA(context)));
                 }
             }
-            if (type.IsXNA() && foundType == null) {
+            if (type.IsIn(XNAScope) && foundType == null) {
                 Console.WriteLine("debug: Could not find type " + type.FullName + " [" + type.Scope.Name + "] in FNA!");
             }
-            return (type.IsXNA() ? Module.ImportIfNeeded(foundType) : null) ?? (fallbackOnXNA || !type.Scope.Name.StartsWith("Microsoft.Xna.Framework") ? type : null);
+            return (type.IsIn(XNAScope) ? Module.ImportIfNeeded(foundType) : null) ?? (fallbackOnXNA || !type.Scope.Name.StartsWith("Microsoft.Xna.Framework") ? type : null);
         }
 
         private static TypeReference FindFNAGeneric(this TypeReference type, MemberReference context) {
@@ -279,13 +293,13 @@ namespace XnaToFna {
         }
 
         private static MethodReference FindFNA(this MethodReference method, MemberReference context) {
-            if (!method.IsXNA()) {
+            if (!method.IsIn(XNAScope)) {
                 return method;
             }
             TypeReference findTypeRef = method.DeclaringType.FindFNA(context, false);
             TypeDefinition findType = findTypeRef == null || findTypeRef.IsArray ? null : findTypeRef.Resolve();
             
-            if (findType != null) {
+            if (findType != null && !method.DeclaringType.IsArray) {
                 bool typeMismatch = findType.FullName != method.DeclaringType.FullName;
 
                 string methodName = method.FullName;
@@ -403,7 +417,7 @@ namespace XnaToFna {
             
             for (int ii = 0; ii < type.Fields.Count; ii++) {
                  FieldDefinition field = type.Fields[ii];
-                 if (!field.FieldType.IsXNA()) {
+                 if (!field.FieldType.IsIn(XNAScope)) {
                     continue;
                  }
                  field.FieldType = field.FieldType.FindFNA(type);
@@ -411,7 +425,7 @@ namespace XnaToFna {
             
             for (int ii = 0; ii < type.Properties.Count; ii++) {
                 PropertyDefinition property = type.Properties[ii];
-                if (!property.PropertyType.IsXNA()) {
+                if (!property.PropertyType.IsIn(XNAScope)) {
                     continue;
                 }
                 property.PropertyType = property.PropertyType.FindFNA(type);
@@ -579,13 +593,13 @@ namespace XnaToFna {
                     
                     if (instruction.Operand is TypeReference) {
                         instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
-                    } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsXNA()) {
+                    } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsIn(XNAScope)) {
                         instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
-                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsXNA()) {
+                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsIn(XNAScope)) {
                         FieldReference field = (FieldReference) instruction.Operand;
     
                         TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
-                        TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsXNA() ? null : findTypeRef.Resolve();
+                        TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsIn(XNAScope) ? null : findTypeRef.Resolve();
                         findTypeRef = Module.ImportIfNeeded(findTypeRef);
                         
                         if (findType != null) {
@@ -625,6 +639,13 @@ namespace XnaToFna {
             
             Console.WriteLine("Loading FNA");
             FNA = ModuleDefinition.ReadModule("FNA.dll", new ReaderParameters(ReadingMode.Immediate));
+            
+            if (File.Exists("MonoGame.Framework.Net.dll")) {
+                Console.WriteLine("Found MonoGame.Framework.Net.dll - Loading MGNET");
+                MGNET = ModuleDefinition.ReadModule("MonoGame.Framework.Net.dll", new ReaderParameters(ReadingMode.Immediate));
+            } else {
+                NETNSScope = new string[0];
+            }
 
             foreach (string arg in args) {
                 if (arg == "--paths") {
@@ -637,6 +658,16 @@ namespace XnaToFna {
                 Module = ModuleDefinition.ReadModule(arg, new ReaderParameters(ReadingMode.Immediate));
 
                 for (int i = 0; i < Module.AssemblyReferences.Count; i++) {
+                    if (Module.AssemblyReferences[i].Name == "Microsoft.Xna.Framework") {
+                        Console.WriteLine("Found reference to XNA - replacing with FNA");
+                        Module.AssemblyReferences[i] = new AssemblyNameReference("FNA", new Version(0, 0, 0, 1));
+                        continue;
+                    }
+                    if (MGNET != null && Module.AssemblyReferences[i].Name == "Microsoft.Xna.Framework.Net") {
+                        Console.WriteLine("Found reference to the XNA NET namespace - replacing with MGNET");
+                        Module.AssemblyReferences[i] = new AssemblyNameReference("MonoGame.Framework.Net", new Version(0, 0, 0, 1));
+                        continue;
+                    }
                     if (Module.AssemblyReferences[i].Name.StartsWith("Microsoft.Xna.Framework.")) {
                         //Xact is causing some random issues
                         /*if (Module.AssemblyReferences[i].Name.EndsWith(".Xact")) {
@@ -647,11 +678,6 @@ namespace XnaToFna {
                         i--;
                         continue;
                     }
-                    if (Module.AssemblyReferences[i].Name != "Microsoft.Xna.Framework") {
-                        continue;
-                    }
-                    Console.WriteLine("Found reference to XNA - replacing with FNA");
-                    Module.AssemblyReferences[i] = new AssemblyNameReference("FNA", new Version(0, 0, 0, 1));
                 }
                 
                 for (int i = 0; i < Module.Types.Count; i++) {
