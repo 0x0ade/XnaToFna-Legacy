@@ -234,7 +234,10 @@ namespace XnaToFna {
                 foundType = new ByReferenceType(((ByReferenceType) type).ElementType.FindFNA(context));
             }
             if (foundType == null && type.IsArray) {
-                foundType = new ArrayType(Module.ImportIfNeeded(((ArrayType) type).ElementType.FindFNA(context)));
+                foundType = new ArrayType(Module.ImportIfNeeded(((ArrayType) type).ElementType.FindFNA(context)), ((ArrayType) type).Dimensions.Count);
+                for (int i = 0; i < ((ArrayType) type).Dimensions.Count; i++) {
+                    ((ArrayType) foundType).Dimensions[i] = ((ArrayType) type).Dimensions[i];
+                }
             }
             if (foundType == null && context != null && type.IsGenericParameter) {
                 foundType = type.FindFNAGeneric(context); 
@@ -354,6 +357,7 @@ namespace XnaToFna {
             if (!method.DeclaringType.IsArray) {
                 Console.WriteLine("debug: Method not found     : " + method.FullName);
                 Console.WriteLine("debug: Method type scope    : " + method.DeclaringType.Scope.Name);
+                Console.WriteLine("debug: Method type reference: " + method.DeclaringType);
                 Console.WriteLine("debug: Found type reference : " + findTypeRef);
                 Console.WriteLine("debug: Found type definition: " + findType);
                 if (findTypeRef != null) {
