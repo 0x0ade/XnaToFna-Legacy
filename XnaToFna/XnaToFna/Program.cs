@@ -35,6 +35,9 @@ namespace XnaToFna {
             if (r == null) {
                 return false;
             }
+            if (r is ArrayType) {
+                return ((ArrayType) r).ElementType.IsIn(scope);
+            }
             if (r.GetElementType() != null && r.GetElementType() != r && r.GetElementType().IsIn(scope)) {
                 return true;
             }
@@ -437,200 +440,208 @@ namespace XnaToFna {
                     continue;
                 }
                 property.PropertyType = property.PropertyType.FindFNA(type);
+                if (property.GetMethod != null) {
+                    patch(type, property.GetMethod);
+                }
+                if (property.SetMethod != null) {
+                    patch(type, property.SetMethod);
+                }
             }
 
             for (int i = 0; i < type.Methods.Count; i++) {
-                MethodDefinition method = type.Methods[i];
+                patch(type, type.Methods[i]);
+            }
+        }
+        
+        public static void patch(TypeDefinition type, MethodDefinition method) {
+            for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
+                method.Body.Variables[ii].VariableType = method.Body.Variables[ii].VariableType.FindFNA(method);
+            }
+            
+            for (int ii = 0; ii < method.Parameters.Count; ii++) {
+                method.Parameters[ii].ParameterType = method.Parameters[ii].ParameterType.FindFNA(method);
+            }
+            
+            method.ReturnType = method.ReturnType.FindFNA(method);
+            
+            for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
+                Instruction instruction = method.Body.Instructions[ii];
                 
-                for (int ii = 0; method.HasBody && ii < method.Body.Variables.Count; ii++) {
-                    method.Body.Variables[ii].VariableType = method.Body.Variables[ii].VariableType.FindFNA(method);
-                }
-                
-                for (int ii = 0; ii < method.Parameters.Count; ii++) {
-                    method.Parameters[ii].ParameterType = method.Parameters[ii].ParameterType.FindFNA(method);
-                }
-                
-                method.ReturnType = method.ReturnType.FindFNA(method);
-                
-                for (int ii = 0; method.HasBody && ii < method.Body.Instructions.Count; ii++) {
-                    Instruction instruction = method.Body.Instructions[ii];
+                if (instruction.OpCode == OpCodes.Ldstr) {
+                    //possibly fix paths
+                    string str = (string) instruction.Operand;
+                    bool pathFixed = false;
                     
-                    if (instruction.OpCode == OpCodes.Ldstr) {
-                        //possibly fix paths
-                        string str = (string) instruction.Operand;
-                        bool pathFixed = false;
-                        
-                        //\ vs /
-                        if (
-                            (!str.StartsWith("Content\\") || str == "Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\' &&
-                            (instruction.Next.OpCode != OpCodes.Call || ((MethodReference) instruction.Next.Operand).Name != "PatchPath")
-                        ) {
-                            //this is quite "harmless" and spammed STDOUT.
-                            if (FixBrokenPaths) {
-                                Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + str);
-                                ILProcessor il = method.Body.GetILProcessor();
-                                
-                                //FIXME this makes the assembly read-only via Mono.Cecil...
-                                il.InsertAfter(instruction, il.Create(OpCodes.Call, Module.Import(xtf_Methods["PatchPath"])));
+                    //\ vs /
+                    if (
+                        (!str.StartsWith("Content\\") || str == "Content\\") && str.Contains("\\") && Path.DirectorySeparatorChar != '\\' &&
+                        (instruction.Next.OpCode != OpCodes.Call || ((MethodReference) instruction.Next.Operand).Name != "PatchPath")
+                    ) {
+                        //this is quite "harmless" and spammed STDOUT.
+                        if (FixBrokenPaths) {
+                            Console.WriteLine("Broken path (\\ vs /) in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + str);
+                            ILProcessor il = method.Body.GetILProcessor();
+                            
+                            //FIXME this makes the assembly read-only via Mono.Cecil...
+                            il.InsertAfter(instruction, il.Create(OpCodes.Call, Module.Import(xtf_Methods["PatchPath"])));
+                        }
+                    }
+                    
+                    //case mismatch
+                    //FIXME this is definitely optimizable!
+                    if (
+                        str.Replace('\\', Path.DirectorySeparatorChar).Contains(Path.DirectorySeparatorChar.ToString()) &&
+                        !File.Exists("." + str) && !Directory.Exists("." + str) &&
+                        !File.Exists(Path.Combine(".", "Content", str)) && !Directory.Exists(Path.Combine(".", "Content", str))
+                    ) {
+                        string strOrig = str;
+                        str = str.Replace('\\', Path.DirectorySeparatorChar);
+                        bool tmpContent = str.IndexOf("Content") < 0 || 1 < str.IndexOf("Content");
+                        int startIndex = 1; //remove the dot
+                        if (str.IndexOf(Path.DirectorySeparatorChar) != 0) {
+                            startIndex = 2; //remove the dash
+                        }
+                        if (tmpContent) {
+                            string tmpStr = str;
+                            str = Path.DirectorySeparatorChar + Path.Combine("Content", str);
+                            startIndex += str.IndexOf(tmpStr) - 1; //remove the temporary content
+                        }
+                        string found = "."+Path.DirectorySeparatorChar;
+                        string[] levels = Path.Combine(".", str.ToLowerInvariant()).Split(Path.DirectorySeparatorChar);
+                        int level = 1;
+                        for (; level < levels.Length; level++) {
+                            bool subFound = false;
+                            
+                            foreach (string sub_ in Directory.EnumerateDirectories(found)) {
+                                string sub = sub_.Substring(found.Length);
+                                if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
+                                    sub = sub.Substring(1);
+                                }
+                                if (Path.Combine(found.Substring(1), sub).ToLowerInvariant() + Path.DirectorySeparatorChar == str.ToLowerInvariant()) {
+                                    found = Path.Combine(found, sub) + Path.DirectorySeparatorChar;
+                                    level = levels.Length - 1;
+                                    subFound = true;
+                                    break;
+                                }
+                                if (sub.ToLowerInvariant() == levels[level]) {
+                                    found = Path.Combine(found, sub);
+                                    subFound = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (subFound) {
+                                continue;
+                            } else if (level < levels.Length - 1) {
+                                if (1 < level) {
+                                    Console.WriteLine("A directory on the path cannot be found case-insensitively!");
+                                    Console.WriteLine("String: " + str);
+                                    Console.WriteLine("String (orig): " + strOrig);
+                                    Console.WriteLine("Path: " + str);
+                                    Console.WriteLine("Found: " + found);
+                                }
+                                break;
+                            }
+                            
+                            if (level < levels.Length - 1) {
+                                continue;
+                            }
+                            
+                            foreach (string sub_ in Directory.EnumerateFiles(found)) {
+                                string sub = sub_.Substring(found.Length);
+                                if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
+                                    sub = sub.Substring(1);
+                                }
+                                if (sub.ToLowerInvariant() == levels[level]) {
+                                    found = Path.Combine(found, sub);
+                                    subFound = true;
+                                }
+                                if (sub.ToLowerInvariant() == levels[level] + ".xnb") {
+                                    found = Path.Combine(found, sub.Substring(0, sub.Length - 4));
+                                    subFound = true;
+                                }
+                                if (subFound) {
+                                    break;
+                                }
+                            }
+                            
+                            if (!subFound) {
+                                if (1 < level) {
+                                    Console.WriteLine("A directory on the path cannot be found case-insensitively!");
+                                    Console.WriteLine("String: " + str);
+                                    Console.WriteLine("String (orig): " + strOrig);
+                                    Console.WriteLine("Path: " + str);
+                                    Console.WriteLine("Found: " + found);
+                                }
+                                break;
                             }
                         }
-                        
-                        //case mismatch
-                        //FIXME this is definitely optimizable!
-                        if (
-                            str.Replace('\\', Path.DirectorySeparatorChar).Contains(Path.DirectorySeparatorChar.ToString()) &&
-                            !File.Exists("." + str) && !Directory.Exists("." + str) &&
-                            !File.Exists(Path.Combine(".", "Content", str)) && !Directory.Exists(Path.Combine(".", "Content", str))
-                        ) {
-                            string strOrig = str;
-                            str = str.Replace('\\', Path.DirectorySeparatorChar);
-                            bool tmpContent = str.IndexOf("Content") < 0 || 1 < str.IndexOf("Content");
-                            int startIndex = 1; //remove the dot
-                            if (str.IndexOf(Path.DirectorySeparatorChar) != 0) {
-                                startIndex = 2; //remove the dash
-                            }
-                            if (tmpContent) {
-                                string tmpStr = str;
-                                str = Path.DirectorySeparatorChar + Path.Combine("Content", str);
-                                startIndex += str.IndexOf(tmpStr) - 1; //remove the temporary content
-                            }
-                            string found = "."+Path.DirectorySeparatorChar;
-                            string[] levels = Path.Combine(".", str.ToLowerInvariant()).Split(Path.DirectorySeparatorChar);
-                            int level = 1;
-                            for (; level < levels.Length; level++) {
-                                bool subFound = false;
-                                
-                                foreach (string sub_ in Directory.EnumerateDirectories(found)) {
-                                    string sub = sub_.Substring(found.Length);
-                                    if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
-                                        sub = sub.Substring(1);
-                                    }
-                                    if (Path.Combine(found.Substring(1), sub).ToLowerInvariant() + Path.DirectorySeparatorChar == str.ToLowerInvariant()) {
-                                        found = Path.Combine(found, sub) + Path.DirectorySeparatorChar;
-                                        level = levels.Length - 1;
-                                        subFound = true;
-                                        break;
-                                    }
-                                    if (sub.ToLowerInvariant() == levels[level]) {
-                                        found = Path.Combine(found, sub);
-                                        subFound = true;
-                                        break;
-                                    }
-                                }
-                                
-                                if (subFound) {
-                                    continue;
-                                } else if (level < levels.Length - 1) {
-                                    if (1 < level) {
-                                        Console.WriteLine("A directory on the path cannot be found case-insensitively!");
-                                        Console.WriteLine("String: " + str);
-                                        Console.WriteLine("String (orig): " + strOrig);
-                                        Console.WriteLine("Path: " + str);
-                                        Console.WriteLine("Found: " + found);
-                                    }
-                                    break;
-                                }
-                                
-                                if (level < levels.Length - 1) {
-                                    continue;
-                                }
-                                
-                                foreach (string sub_ in Directory.EnumerateFiles(found)) {
-                                    string sub = sub_.Substring(found.Length);
-                                    if (sub.IndexOf(Path.DirectorySeparatorChar) == 0) {
-                                        sub = sub.Substring(1);
-                                    }
-                                    if (sub.ToLowerInvariant() == levels[level]) {
-                                        found = Path.Combine(found, sub);
-                                        subFound = true;
-                                    }
-                                    if (sub.ToLowerInvariant() == levels[level] + ".xnb") {
-                                        found = Path.Combine(found, sub.Substring(0, sub.Length - 4));
-                                        subFound = true;
-                                    }
-                                    if (subFound) {
-                                        break;
-                                    }
-                                }
-                                
-                                if (!subFound) {
-                                    if (1 < level) {
-                                        Console.WriteLine("A directory on the path cannot be found case-insensitively!");
-                                        Console.WriteLine("String: " + str);
-                                        Console.WriteLine("String (orig): " + strOrig);
-                                        Console.WriteLine("Path: " + str);
-                                        Console.WriteLine("Found: " + found);
-                                    }
-                                    break;
-                                }
-                            }
-                            if (level >= levels.Length && (found = found.Substring(startIndex)) != strOrig) {
-                                if (found != str.Substring(startIndex - 1)) {
-                                    Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + strOrig);
-                                    if (FixBrokenPaths) {
-                                        str = found;
-                                        pathFixed = true;
-                                    } else {
-                                        str = strOrig;
-                                    }
+                        if (level >= levels.Length && (found = found.Substring(startIndex)) != strOrig) {
+                            if (found != str.Substring(startIndex - 1)) {
+                                Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + strOrig);
+                                if (FixBrokenPaths) {
+                                    str = found;
+                                    pathFixed = true;
                                 } else {
                                     str = strOrig;
                                 }
                             } else {
                                 str = strOrig;
                             }
-                        }
-                        
-                        if (pathFixed) {
-                            Console.WriteLine("New path: " + str);
-                        }
-                        instruction.Operand = str;
-                        continue;
-                    }
-                    
-                    //Does this even fix anything? The above path fixes should fix this.
-                    /*
-                    if (instruction.OpCode == OpCodes.Ldstr && ((string) instruction.Operand).Contains("\\")) {
-                        if (FixBrokenPaths) {
-                            instruction.Operand = ((string) instruction.Operand).Replace("\\", "/");
                         } else {
-                            Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
+                            str = strOrig;
                         }
                     }
-                    */
                     
-                    if (instruction.Operand is TypeReference) {
-                        instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
-                    } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsIn(XNAScope)) {
-                        instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
-                    } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsIn(XNAScope)) {
-                        FieldReference field = (FieldReference) instruction.Operand;
-    
-                        TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
-                        TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsIn(XNAScope) ? null : findTypeRef.Resolve();
-                        findTypeRef = Module.ImportIfNeeded(findTypeRef);
-                        
-                        if (findType != null) {
-                            for (int iii = 0; iii < findType.Fields.Count; iii++) {
-                                if (findType.Fields[iii].Name == field.Name) {
-                                    FieldReference foundField = findType.Fields[iii];
-                                    
-                                    if (field.DeclaringType.IsGenericInstance) {
-                                        foundField = Module.ImportIfNeeded(new FieldReference(field.Name, field.FieldType.FindFNA(findTypeRef), findTypeRef));
-                                    }
-                                    
-                                    field = Module.ImportIfNeeded(foundField);
-                                    break;
+                    if (pathFixed) {
+                        Console.WriteLine("New path: " + str);
+                    }
+                    instruction.Operand = str;
+                    continue;
+                }
+                
+                //Does this even fix anything? The above path fixes should fix this.
+                /*
+                if (instruction.OpCode == OpCodes.Ldstr && ((string) instruction.Operand).Contains("\\")) {
+                    if (FixBrokenPaths) {
+                        instruction.Operand = ((string) instruction.Operand).Replace("\\", "/");
+                    } else {
+                        Console.WriteLine("Broken path in " + method.DeclaringType.FullName + "." + method.Name + " (IL_" + (instruction.Offset.ToString("x4")) + "): " + ((string) instruction.Operand));
+                    }
+                }
+                */
+                
+                if (instruction.Operand is TypeReference) {
+                    instruction.Operand = ((TypeReference) instruction.Operand).FindFNA(method);
+                } else if (instruction.Operand is MethodReference && ((MethodReference) instruction.Operand).IsIn(XNAScope)) {
+                    instruction.Operand = ((MethodReference) instruction.Operand).FindFNA(method);
+                } else if (instruction.Operand is FieldReference && ((FieldReference) instruction.Operand).IsIn(XNAScope)) {
+                    FieldReference field = (FieldReference) instruction.Operand;
+
+                    TypeReference findTypeRef = field.DeclaringType.FindFNA(method);
+                    TypeDefinition findType = findTypeRef == null ? null : findTypeRef.IsIn(XNAScope) ? null : findTypeRef.Resolve();
+                    findTypeRef = Module.ImportIfNeeded(findTypeRef);
+                    
+                    if (findType != null) {
+                        for (int iii = 0; iii < findType.Fields.Count; iii++) {
+                            if (findType.Fields[iii].Name == field.Name) {
+                                FieldReference foundField = findType.Fields[iii];
+                                
+                                if (field.DeclaringType.IsGenericInstance) {
+                                    foundField = Module.ImportIfNeeded(new FieldReference(field.Name, field.FieldType.FindFNA(findTypeRef), findTypeRef));
                                 }
+                                
+                                field = Module.ImportIfNeeded(foundField);
+                                break;
                             }
                         }
-    
-                        if (field == instruction.Operand) {
-                            field = Module.Import(new FieldReference(field.Name, Module.ImportIfNeeded(field.FieldType.FindFNA(method)), Module.ImportIfNeeded(field.DeclaringType.FindFNA(method))));
-                        }
-                        
-                        instruction.Operand = field;
                     }
+
+                    if (field == instruction.Operand) {
+                        field = Module.Import(new FieldReference(field.Name, Module.ImportIfNeeded(field.FieldType.FindFNA(method)), Module.ImportIfNeeded(field.DeclaringType.FindFNA(method))));
+                    }
+                    
+                    instruction.Operand = field;
                 }
             }
         }
