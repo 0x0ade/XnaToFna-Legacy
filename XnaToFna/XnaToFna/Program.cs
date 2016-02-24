@@ -18,7 +18,7 @@ namespace XnaToFna {
         private static ModuleDefinition Module;
         
         private static string[] XNAScope = {"Microsoft.Xna.Framework", "FNA"};
-        private static string[] NETNSScope = {"Microsoft.Xna.Framework.Net", "MonoGame.Framework.Net"}; //TODO the latter is just guessed
+        private static string[] NETNSScope = {"Microsoft.Xna.Framework.Net", "Microsoft.Xna.Framework.GamerServices", "MonoGame.Framework.Net"}; //TODO the latter is just guessed
 
         
         private static TypeReference ImportIfNeeded(this ModuleDefinition module, TypeReference r) {
@@ -682,7 +682,7 @@ namespace XnaToFna {
                         Module.AssemblyReferences[i] = new AssemblyNameReference("FNA", new Version(0, 0, 0, 1));
                         continue;
                     }
-                    if (MGNET != null && Module.AssemblyReferences[i].Name == "Microsoft.Xna.Framework.Net") {
+                    if (MGNET != null && (Module.AssemblyReferences[i].Name == "Microsoft.Xna.Framework.Net" || Module.AssemblyReferences[i].Name == "Microsoft.Xna.Framework.GamerServices")) {
                         Console.WriteLine("Found reference to the XNA NET namespace - replacing with MGNET");
                         Module.AssemblyReferences[i] = new AssemblyNameReference("MonoGame.Framework.Net", new Version(0, 0, 0, 1));
                         continue;
